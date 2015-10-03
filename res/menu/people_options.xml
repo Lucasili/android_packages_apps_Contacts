@@ -40,6 +40,9 @@
         android:id="@+id/menu_settings"
         android:title="@string/menu_settings" />
     <item
+        android:id="@+id/menu_set_ringtone"
+        android:title="@string/menu_set_ring_tone" />
+    <item
         android:id="@+id/menu_add_group"
         android:title="@string/menu_new_group_action_bar" />
     <item
