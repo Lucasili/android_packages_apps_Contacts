@@ -20,6 +20,10 @@
         android:title="@string/menu_editGroup"
         android:alphabeticShortcut="e" />
 
+     <item
+        android:id="@+id/menu_set_ringtone"
+        android:title="@string/menu_set_ring_tone" />
+
     <item
         android:id="@+id/menu_delete_group"
         android:title="@string/menu_deleteGroup" />
