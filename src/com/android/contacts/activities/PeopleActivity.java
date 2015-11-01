@@ -108,6 +108,12 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import android.media.RingtoneManager;
+import android.provider.MediaStore;
+import android.content.Context;
+import android.database.Cursor;
+import android.content.CursorLoader;
+
 /**
  * Displays a list to browse contacts.
  */
@@ -128,6 +134,8 @@ public class PeopleActivity extends ContactsActivity implements
     private static final int SUBACTIVITY_ACCOUNT_FILTER = 2;
     private static final int SUBACTIVITY_NEW_GROUP = 4;
     private static final int SUBACTIVITY_EDIT_GROUP = 5;
+
+    private static final int REQUEST_CODE_PICK_RINGTONE = 8;
 
     private final DialogManager mDialogManager = new DialogManager(this);
 
@@ -157,6 +165,9 @@ public class PeopleActivity extends ContactsActivity implements
     private DefaultContactBrowseListFragment mAllFragment;
     private ContactTileListFragment mFavoritesFragment;
     private GroupBrowseListFragment mGroupsFragment;
+
+    private String mCustomRingtone;
+    private Context mContext;
 
     /** ViewPager for swipe */
     private ViewPager mTabPager;
@@ -195,6 +206,7 @@ public class PeopleActivity extends ContactsActivity implements
     private BroadcastReceiver mExportToSimCompleteListener = null;
 
     public PeopleActivity() {
+        mContext = this;
         mInstanceId = sNextInstanceId.getAndIncrement();
         mIntentResolver = new ContactsIntentResolver(this);
         mProviderStatusWatcher = ProviderStatusWatcher.getInstance(this);
@@ -250,6 +262,7 @@ public class PeopleActivity extends ContactsActivity implements
             finish();
             return;
         }
+        mCustomRingtone = getGroupCustomRingtone(0);
         mContactListFilterController = ContactListFilterController.getInstance(this);
         mContactListFilterController.checkFilterValidity(false);
         mContactListFilterController.addListener(this);
@@ -1233,6 +1246,7 @@ public class PeopleActivity extends ContactsActivity implements
 
         // Get references to individual menu items in the menu
         final MenuItem contactsFilterMenu = menu.findItem(R.id.menu_contacts_filter);
+        final MenuItem optionsRingtone = menu.findItem(R.id.menu_set_ringtone);
 
         MenuItem addGroupMenu = menu.findItem(R.id.menu_add_group);
 
@@ -1246,17 +1260,20 @@ public class PeopleActivity extends ContactsActivity implements
             clearFrequentsMenu.setVisible(false);
             helpMenu.setVisible(false);
             makeMenuItemVisible(menu, R.id.menu_delete, false);
+            optionsRingtone.setVisible(false);
         } else {
             switch (getTabPositionForTextDirection(mActionBarAdapter.getCurrentTab())) {
                 case TabState.FAVORITES:
                     addGroupMenu.setVisible(false);
                     contactsFilterMenu.setVisible(false);
                     clearFrequentsMenu.setVisible(hasFrequents());
+                    optionsRingtone.setVisible(false);
                     break;
                 case TabState.ALL:
                     addGroupMenu.setVisible(false);
                     contactsFilterMenu.setVisible(true);
                     clearFrequentsMenu.setVisible(false);
+                    optionsRingtone.setVisible(true);
                     break;
                 case TabState.GROUPS:
                     // Do not display the "new group" button if no accounts are available
@@ -1265,8 +1282,10 @@ public class PeopleActivity extends ContactsActivity implements
                     } else {
                         addGroupMenu.setVisible(false);
                     }
+                    addGroupMenu.setVisible(true);
                     contactsFilterMenu.setVisible(false);
                     clearFrequentsMenu.setVisible(false);
+                    optionsRingtone.setVisible(false);
                     break;
             }
             HelpUtils.prepareHelpMenuItem(this, helpMenu, R.string.help_url_people_main);
@@ -1278,6 +1297,7 @@ public class PeopleActivity extends ContactsActivity implements
         makeMenuItemVisible(menu, R.id.menu_memory_status, showMiscOptions);
         makeMenuItemVisible(menu, R.id.menu_settings,
                 showMiscOptions && !ContactsPreferenceActivity.isEmpty(this));
+        makeMenuItemVisible(menu, R.id.menu_set_ringtone, showMiscOptions && (mActionBarAdapter.getCurrentTab()==TabState.ALL));
 
         // Debug options need to be visible even in search mode.
         makeMenuItemVisible(menu, R.id.export_database, mEnableDebugMenuOptions);
@@ -1385,6 +1405,10 @@ public class PeopleActivity extends ContactsActivity implements
                 startActivity(intent);
                 return true;
             }
+            case R.id.menu_set_ringtone: {
+                doPickRingtone();
+                return true;
+            }
 
         }
         return false;
@@ -1420,6 +1444,13 @@ public class PeopleActivity extends ContactsActivity implements
                 break;
             }
 
+            case REQUEST_CODE_PICK_RINGTONE: {
+                if (resultCode == RESULT_OK) {
+                    Uri pickedUri = data.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI);
+                    handleRingtonePicked(pickedUri);
+                }
+                break;
+            }
             // TODO: Using the new startActivityWithResultFromFragment API this should not be needed
             // anymore
             case ContactEntryListFragment.ACTIVITY_REQUEST_CODE_PICKER:
@@ -1645,5 +1676,136 @@ public class PeopleActivity extends ContactsActivity implements
             return TabState.COUNT - 1 - position;
         }
         return position;
+    }
+
+    private void doPickRingtone() {
+
+        Intent intent = new Intent(RingtoneManager.ACTION_RINGTONE_PICKER);
+        // Allow user to pick 'Default'
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true);
+        // Show only ringtones
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_RINGTONE);
+        // Don't show 'Silent'
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false);
+
+        Uri ringtoneUri;
+        if (mCustomRingtone.isEmpty()==false) {
+            Log.w(TAG,mCustomRingtone);
+            ringtoneUri = Uri.parse(mCustomRingtone);
+        } else {
+            // Otherwise pick default ringtone Uri so that something is selected.
+            ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+        }
+
+        // Put checkmark next to the current ringtone for this contact
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, ringtoneUri);
+
+        // Launch!
+        startActivityForResult(intent, REQUEST_CODE_PICK_RINGTONE);
+    }
+
+    private void handleRingtonePicked(Uri pickedUri) {
+        if (pickedUri == null || RingtoneManager.isDefault(pickedUri)) {
+            mCustomRingtone = "";
+        } else {
+            mCustomRingtone = pickedUri.toString();
+        }
+        // write file with custom ringtones
+        setGroupCustomRingtone(0,pickedUri);
+    }
+
+    public String getGroupCustomRingtone(long group_id) {
+    // TODO read file and return custom ringtone for this group
+        String lGroupRingtone = "";
+        lGroupRingtone = Settings.System.getString(mContext.getContentResolver(),Settings.System.GROUP_RINGTONE);
+        if(group_id==-99) return lGroupRingtone;
+	else
+	{
+             String Ringtone="";
+             if(lGroupRingtone.isEmpty()==false)
+             {
+                 String splitted[]=lGroupRingtone.split("\\|");
+                 for(int i=0; i<splitted.length; i++)
+                 {
+                      String vals[]=splitted[i].split("§");
+                      if(vals[0].compareTo(String.format("GROUP_%d",group_id))==0) {Ringtone=vals[1];break;}
+                 }
+             }
+             Uri finalSuccessfulUri=null;
+             if(Ringtone.isEmpty()==false)
+             {
+                  String vals2[]=Ringtone.split("@");
+                  Uri uriRingtone = MediaStore.Audio.Media.getContentUriForPath(vals2[0]);
+                  String suri=uriRingtone.toString();
+                  if(suri.contains(vals2[1])==false)
+                  {
+                       if(vals2[1].compareTo("internal")==0) suri=suri.replace("external","internal");
+                       else suri=suri.replace("internal","external");
+                       uriRingtone=Uri.parse(suri);
+                  }
+
+                  RingtoneManager rm = new RingtoneManager(mContext); 
+                  Cursor cursor = rm.getCursor();
+                  cursor.moveToFirst();
+
+                  while(!cursor.isAfterLast())
+                  {
+                      if(vals2[0].compareToIgnoreCase(cursor.getString(cursor.getColumnIndex(MediaStore.MediaColumns.TITLE))) == 0)
+                      {
+                           int ringtoneID = cursor.getInt(cursor.getColumnIndex(MediaStore.MediaColumns._ID));
+                           finalSuccessfulUri = Uri.withAppendedPath(uriRingtone, "" + ringtoneID );
+                           break;
+                      }
+                      cursor.moveToNext();
+                  }
+                  cursor.close();
+                  if(finalSuccessfulUri!=null) return finalSuccessfulUri.toString();
+             }
+             return "";
+        }
+    }
+    
+    public void setGroupCustomRingtone(long group_id, Uri ringUri) {
+        // TODO read file and return custom ringtone for this group
+        String File_Cont= "";
+        File_Cont=getGroupCustomRingtone(-99);
+        String int_ext="external";
+        if(ringUri.toString().contains("internal")==true) int_ext="internal";
+        String Curr_Tone=String.format("GROUP_%d§%s@%s|", group_id,getTitleFromURI(ringUri),int_ext);
+        StringBuffer file=new StringBuffer("");
+        if(File_Cont.isEmpty()==false)
+        {
+            String splitted[]=File_Cont.split("\\|");
+            StringBuffer outbuffer=new StringBuffer("");
+            for(int i=0; i<splitted.length; i++)
+            {
+                String vals[]=splitted[i].split("§");
+                if(vals[0].compareTo(String.format("GROUP_%d",group_id))==0)
+                {
+                    splitted[i]="";
+                    if(mCustomRingtone.isEmpty()==false) splitted[i]=Curr_Tone.substring(0,Curr_Tone.length()-1);
+                    Curr_Tone="";
+                }
+                outbuffer.append(splitted[i]);
+                if(splitted[i]!=null)
+                {
+                    if(splitted[i].isEmpty()==false) outbuffer.append("|");
+                }
+            }
+            File_Cont="";
+            File_Cont=outbuffer.toString();
+        }
+        file.append(File_Cont);
+        file.append(Curr_Tone);
+        Settings.System.putString(mContext.getContentResolver(),Settings.System.GROUP_RINGTONE, file.toString());
+    }
+
+    public String getTitleFromURI(Uri contentUri) {
+        String[] proj = { MediaStore.Audio.Media.TITLE };
+        CursorLoader loader = new CursorLoader(mContext, contentUri, proj, null, null, null);
+        Cursor cursor = loader.loadInBackground();
+        int column_index = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE);
+        cursor.moveToFirst();
+        return cursor.getString(column_index);
     }
 }

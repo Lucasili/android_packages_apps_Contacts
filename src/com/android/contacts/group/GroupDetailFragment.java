@@ -50,6 +50,9 @@ import android.widget.AbsListView.OnScrollListener;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.media.RingtoneManager;
+import android.provider.MediaStore;
+import android.provider.Settings;
 
 import com.android.contacts.GroupMemberLoader;
 import com.android.contacts.GroupMetaDataLoader;
@@ -100,6 +103,7 @@ public class GroupDetailFragment extends Fragment implements OnScrollListener {
 
     private static final int LOADER_METADATA = 0;
     private static final int LOADER_MEMBERS = 1;
+    private static final int REQUEST_CODE_PICK_RINGTONE = 1;
 
     private Context mContext;
 
@@ -130,6 +134,7 @@ public class GroupDetailFragment extends Fragment implements OnScrollListener {
     private boolean mOptionsMenuGroupDeletable;
     private boolean mOptionsMenuGroupEditable;
     private boolean mCloseActivityAfterDelete;
+    private String mCustomRingtone;
 
     public GroupDetailFragment() {
     }
@@ -310,6 +315,7 @@ public class GroupDetailFragment extends Fragment implements OnScrollListener {
             mGroupId = cursor.getLong(GroupMetaDataLoader.GROUP_ID);
             mGroupName = cursor.getString(GroupMetaDataLoader.TITLE);
             mIsReadOnly = cursor.getInt(GroupMetaDataLoader.IS_READ_ONLY) == 1;
+            mCustomRingtone = getGroupCustomRingtone(mGroupId);
             updateTitle(mGroupName);
             // Must call invalidate so that the option menu will get updated
             getActivity().invalidateOptionsMenu ();
@@ -464,6 +470,11 @@ public class GroupDetailFragment extends Fragment implements OnScrollListener {
 
         final MenuItem moveMenu = menu.findItem(R.id.menu_move_group_members);
         moveMenu.setVisible(isVisible() && mAdapter != null && mAdapter.getCount() > 0);
+
+        final MenuItem optionsRingtone = menu.findItem(R.id.menu_set_ringtone);
+        if (optionsRingtone != null) {
+            optionsRingtone.setVisible(mOptionsMenuGroupEditable);
+        }
     }
 
     @Override
@@ -490,6 +501,11 @@ public class GroupDetailFragment extends Fragment implements OnScrollListener {
                 startActivity(intent);
                 return true;
             }
+            case R.id.menu_set_ringtone: {
+                doPickRingtone();
+                return true;
+            }
+
         }
         return false;
     }
@@ -500,5 +516,150 @@ public class GroupDetailFragment extends Fragment implements OnScrollListener {
 
     public long getGroupId() {
         return mGroupId;
+    }
+
+    private void doPickRingtone() {
+
+        Intent intent = new Intent(RingtoneManager.ACTION_RINGTONE_PICKER);
+        // Allow user to pick 'Default'
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true);
+        // Show only ringtones
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_RINGTONE);
+        // Don't show 'Silent'
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false);
+
+        Uri ringtoneUri;
+        if (mCustomRingtone.isEmpty()==false) {
+            ringtoneUri = Uri.parse(mCustomRingtone);
+        } else {
+            // Otherwise pick default ringtone Uri so that something is selected.
+            ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+        }
+
+        // Put checkmark next to the current ringtone for this contact
+        intent.putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, ringtoneUri);
+
+        // Launch!
+        startActivityForResult(intent, REQUEST_CODE_PICK_RINGTONE);
+    }
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (resultCode != Activity.RESULT_OK) {
+            return;
+        }
+
+        switch (requestCode) {
+            case REQUEST_CODE_PICK_RINGTONE: {
+                Uri pickedUri = data.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI);
+                handleRingtonePicked(pickedUri);
+                break;
+            }
+        }
+    }
+
+    private void handleRingtonePicked(Uri pickedUri) {
+        if (pickedUri == null || RingtoneManager.isDefault(pickedUri)) {
+            mCustomRingtone = "";
+        } else {
+            mCustomRingtone = pickedUri.toString();
+        }
+        // write file with custom ringtones
+        setGroupCustomRingtone(mGroupId,pickedUri);
+    }
+
+    public String getGroupCustomRingtone(long group_id) {
+    // TODO read file and return custom ringtone for this group
+        String lGroupRingtone = "";
+        lGroupRingtone = Settings.System.getString(mContext.getContentResolver(),Settings.System.GROUP_RINGTONE);
+        if(group_id==-99) return lGroupRingtone;
+	else
+	{
+             String Ringtone="";
+             if(lGroupRingtone.isEmpty()==false)
+             {
+                 String splitted[]=lGroupRingtone.split("\\|");
+                 for(int i=0; i<splitted.length; i++)
+                 {
+                      String vals[]=splitted[i].split("§");
+                      if(vals[0].compareTo(String.format("GROUP_%d",group_id))==0) {Ringtone=vals[1];break;}
+                 }
+             }
+             Uri finalSuccessfulUri=null;
+             if(Ringtone.isEmpty()==false)
+             {
+                  String vals2[]=Ringtone.split("@");
+                  Uri uriRingtone = MediaStore.Audio.Media.getContentUriForPath(vals2[0]);
+                  String suri=uriRingtone.toString();
+                  if(suri.contains(vals2[1])==false)
+                  {
+                       if(vals2[1].compareTo("internal")==0) suri=suri.replace("external","internal");
+                       else suri=suri.replace("internal","external");
+                       uriRingtone=Uri.parse(suri);
+                  }
+
+                  RingtoneManager rm = new RingtoneManager(mContext); 
+                  Cursor cursor = rm.getCursor();
+                  cursor.moveToFirst();
+
+                  while(!cursor.isAfterLast())
+                  {
+                      if(vals2[0].compareToIgnoreCase(cursor.getString(cursor.getColumnIndex(MediaStore.MediaColumns.TITLE))) == 0)
+                      {
+                           int ringtoneID = cursor.getInt(cursor.getColumnIndex(MediaStore.MediaColumns._ID));
+                           finalSuccessfulUri = Uri.withAppendedPath(uriRingtone, "" + ringtoneID );
+                           break;
+                      }
+                      cursor.moveToNext();
+                  }
+                  cursor.close();
+                  if(finalSuccessfulUri!=null) return finalSuccessfulUri.toString();
+             }
+             return "";
+        }
+    }
+    
+    public void setGroupCustomRingtone(long group_id, Uri ringUri) {
+    // TODO read file and return custom ringtone for this group
+        String File_Cont= "";
+        File_Cont=getGroupCustomRingtone(-99);
+        String int_ext="external";
+        if(ringUri.toString().contains("internal")==true) int_ext="internal";
+        String Curr_Tone=String.format("GROUP_%d§%s@%s|", group_id,getTitleFromURI(ringUri),int_ext);
+        StringBuffer file=new StringBuffer("");
+        if(File_Cont.isEmpty()==false)
+        {
+            String splitted[]=File_Cont.split("\\|");
+            StringBuffer outbuffer=new StringBuffer("");
+            for(int i=0; i<splitted.length; i++)
+            {
+                String vals[]=splitted[i].split("§");
+                if(vals[0].compareTo(String.format("GROUP_%d",group_id))==0)
+                {
+                    splitted[i]="";
+                    if(mCustomRingtone.isEmpty()==false) splitted[i]=Curr_Tone.substring(0,Curr_Tone.length()-1);
+                    Curr_Tone="";
+                }
+                outbuffer.append(splitted[i]);
+                if(splitted[i]!=null)
+                {
+                    if(splitted[i].isEmpty()==false) outbuffer.append("|");
+                }
+            }
+            File_Cont="";
+            File_Cont=outbuffer.toString();
+        }
+        file.append(File_Cont);
+        file.append(Curr_Tone);
+        Settings.System.putString(mContext.getContentResolver(),Settings.System.GROUP_RINGTONE, file.toString());
+    }
+
+    public String getTitleFromURI(Uri contentUri) {
+        String[] proj = { MediaStore.Audio.Media.TITLE };
+        CursorLoader loader = new CursorLoader(mContext, contentUri, proj, null, null, null);
+        Cursor cursor = loader.loadInBackground();
+        int column_index = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE);
+        cursor.moveToFirst();
+        return cursor.getString(column_index);
     }
 }
